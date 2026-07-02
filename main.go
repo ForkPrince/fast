@@ -7,63 +7,34 @@ import (
 	"log"
 	"net"
 	"os"
-	"strings"
+	"os/signal"
 	"sync/atomic"
+	"syscall"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 const (
-	// connections is the number of parallel downloads we use to saturate the
-	// connection, the same as fast.com.
 	connections = 5
-
-	// duration is how long we measure the connection speed for.
-	duration = 10 * time.Second
-
-	// sparkWidth is the width, in cells, of the speed sparkline.
-	sparkWidth = 20
-)
-
-const accentColor = "#2EF8BB"
-
-var (
-	speedStyle = lipgloss.NewStyle().Bold(true)
-	unitStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	sparkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(accentColor))
-	peakStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	baseStyle  = lipgloss.NewStyle().Padding(1, 2)
+	duration    = 10 * time.Second
+	sparkWidth  = 20
 )
 
 const tickInterval = time.Second / 10
 
-type tickMsg time.Time
-
-func tickCmd(t time.Time) tea.Msg {
-	return tickMsg(t)
-}
-
 type Model struct {
 	targets []string
-
-	bytes  *atomic.Int64
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	start  time.Time
-	speed  float64
-	speeds []float64
-	peak   float64
-
-	done     bool
-	quitting bool
+	bytes   *atomic.Int64
+	ctx     context.Context
+	cancel  context.CancelFunc
+	start   time.Time
+	speed   float64
+	speeds  []float64
+	peak    float64
+	done    bool
 }
 
 func NewModel(targets []string) Model {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
-
 	return Model{
 		targets: targets,
 		bytes:   &atomic.Int64{},
@@ -73,80 +44,71 @@ func NewModel(targets []string) Model {
 	}
 }
 
-func (m Model) Init() tea.Cmd {
-	return tea.Batch(tea.Tick(tickInterval, tickCmd), m.measure)
-}
-
-// measure kicks off the parallel downloads that feed our byte counter.
-func (m Model) measure() tea.Msg {
+func (m *Model) run() {
 	for _, url := range m.targets {
 		go download(m.ctx, url, m.bytes)
 	}
-	return nil
-}
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc", "ctrl+c":
-			m.quitting = true
-			m.cancel()
-			return m, tea.Quit
-		}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	case tickMsg:
-		elapsed := time.Since(m.start)
-		m.speed = mbps(m.bytes.Load(), elapsed)
-		m.speeds = append(m.speeds, m.speed)
-		if m.speed > m.peak {
-			m.peak = m.speed
-		}
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
 
-		if elapsed >= duration {
+	fmt.Print("\033[?25l")
+	defer fmt.Print("\033[?25h")
+
+	for {
+		select {
+		case <-m.ctx.Done():
 			m.done = true
+			m.render()
+			fmt.Println()
+			return
+		case <-ticker.C:
+			elapsed := time.Since(m.start)
+			m.speed = mbps(m.bytes.Load(), elapsed)
+			m.speeds = append(m.speeds, m.speed)
+			if m.speed > m.peak {
+				m.peak = m.speed
+			}
+			m.render()
+		case <-sigCh:
 			m.cancel()
-			return m, tea.Quit
+			return
 		}
-
-		return m, tea.Tick(tickInterval, tickCmd)
 	}
-
-	return m, nil
 }
 
-func (m Model) View() string {
-	if m.quitting {
-		return ""
-	}
+func (m *Model) render() {
+	fmt.Print("\033[2K\033[G")
 
-	var s strings.Builder
-	// Cap each readout at 999.9 and switch to Gbps beyond that, keeping a fixed
-	// width so the unit, sparkline, and peak never shift horizontally.
 	speed, unit := scale(m.speed)
-	s.WriteString(speedStyle.Render(fmt.Sprintf("%5.1f", speed)))
-	s.WriteString(unitStyle.Render(" " + unit))
-	s.WriteString(" ")
-	s.WriteString(sparkStyle.Render(sparkline(m.speeds, m.peak, sparkWidth)))
+	peak, peakUnit := scale(m.peak)
+
+	accent := "\033[38;2;46;248;187m"
+	gray := "\033[38;5;240m"
+	reset := "\033[0m"
+	bold := "\033[1m"
+
+	line := bold + accent + fmt.Sprintf("%5.1f", speed) + reset
+	line += gray + " " + unit + reset
+	line += " "
+	line += accent + sparkline(m.speeds, m.peak, sparkWidth) + reset
+
 	if m.peak > 0 {
-		peak, peakUnit := scale(m.peak)
-		label := fmt.Sprintf("  peak %.0f", peak)
-		// Only label the peak's unit when it differs from the live reading's.
+		var label string
 		if peakUnit != unit {
-			label += " " + peakUnit
+			label = fmt.Sprintf("  peak %.0f %s", peak, peakUnit)
+		} else {
+			label = fmt.Sprintf("  peak %.0f", peak)
 		}
-		s.WriteString(peakStyle.Render(label))
+		line += gray + label + reset
 	}
 
-	style := baseStyle
-	if m.done {
-		style = style.PaddingBottom(2)
-	}
-	return style.Render(s.String())
+	fmt.Print(line)
 }
 
-// mbps converts a number of bytes downloaded over a duration into megabits per
-// second, the unit fast.com reports.
 func mbps(bytes int64, d time.Duration) float64 {
 	if d <= 0 {
 		return 0
@@ -154,8 +116,6 @@ func mbps(bytes int64, d time.Duration) float64 {
 	return float64(bytes) * 8 / d.Seconds() / 1e6
 }
 
-// scale converts a speed in Mbps to its display magnitude and unit, switching to
-// Gbps once it would read past 999.9 Mbps so the value never exceeds "999.9".
 func scale(speed float64) (float64, string) {
 	if speed >= 999.95 {
 		return speed / 1000, "Gbps"
@@ -174,7 +134,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if _, err := tea.NewProgram(NewModel(urls)).Run(); err != nil {
-		log.Fatal(err)
-	}
+	m := NewModel(urls)
+	m.run()
 }
