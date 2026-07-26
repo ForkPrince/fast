@@ -1,88 +1,34 @@
 package main
 
-import (
-	"fmt"
-	"strings"
+import "fmt"
 
-	"github.com/charmbracelet/lipgloss"
-)
+func (m *Model) render() {
+	fmt.Print("\033[2K\033[G")
 
-const (
-	sparkWidth = 20
+	speed, unit := scale(m.speed)
+	peak, peakUnit := scale(m.peak)
 
-	downloadColor = "#2EF8BB"
-	uploadColor   = "#BD52FF"
+	accent := "\033[38;2;46;248;187m"
+	gray := "\033[38;5;240m"
+	reset := "\033[0m"
+	bold := "\033[1m"
 
-	downloadLabel = "↓"
-	uploadLabel   = "↑"
-)
+	line := bold + accent + fmt.Sprintf("%5.1f", speed) + reset
+	line += gray + " " + unit + reset
+	line += " "
+	line += accent + sparkline(m.speeds, m.peak, sparkWidth) + reset
 
-var (
-	speedStyle   = lipgloss.NewStyle().Bold(true)
-	unitStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	dlSparkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(downloadColor))
-	ulSparkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(uploadColor))
-	peakStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	baseStyle    = lipgloss.NewStyle().Padding(1, 2)
-)
-
-func renderRow(label string, currentSpeed float64, speeds []float64, peak float64, sparkStyle lipgloss.Style) string {
-	var s strings.Builder
-	s.WriteString(sparkStyle.Render(label))
-	s.WriteString(" ")
-	speed, unit := scale(currentSpeed)
-	s.WriteString(speedStyle.Render(fmt.Sprintf("%5.1f", speed)))
-	s.WriteString(unitStyle.Render(" " + unit))
-	s.WriteString(" ")
-	s.WriteString(sparkStyle.Render(sparkline(speeds, peak, sparkWidth)))
-	if peak > 0 {
-		peakVal, peakUnit := scale(peak)
-		label := fmt.Sprintf("  peak %.0f", peakVal)
+	if m.peak > 0 {
+		var label string
 		if peakUnit != unit {
-			label += " " + peakUnit
+			label = fmt.Sprintf("  peak %.0f %s", peak, peakUnit)
+		} else {
+			label = fmt.Sprintf("  peak %.0f", peak)
 		}
-		s.WriteString(peakStyle.Render(label))
-	}
-	return s.String()
-}
-
-func renderSummary(m Model) string {
-	sep := unitStyle.Render(" • ")
-	ping := unitStyle.Render("—")
-	if m.ping > 0 {
-		ping = speedStyle.Render(fmt.Sprintf("%d", m.ping.Milliseconds())) + unitStyle.Render(" ms")
-	}
-	return summarySpeed(downloadLabel, m.download.speed, dlSparkStyle) + sep +
-		summarySpeed(uploadLabel, m.upload.speed, ulSparkStyle) + sep + ping
-}
-
-func summarySpeed(label string, speed float64, sparkStyle lipgloss.Style) string {
-	value, unit := scale(speed)
-	return sparkStyle.Render(label) + " " +
-		speedStyle.Render(fmt.Sprintf("%.1f", value)) +
-		unitStyle.Render(" "+unit)
-}
-
-func (m Model) View() string {
-	if m.quitting {
-		return ""
+		line += gray + label + reset
 	}
 
-	var content string
-	switch m.phase {
-	case phaseLoading, phaseDownloading:
-		content = renderRow(downloadLabel, m.download.speed, m.download.samples, m.download.peak, dlSparkStyle)
-	case phaseUploading, phaseMeasuringPing:
-		content = renderRow(uploadLabel, m.upload.speed, m.upload.samples, m.upload.peak, ulSparkStyle)
-	case phaseDone:
-		content = renderSummary(m)
-	}
-
-	style := baseStyle
-	if m.phase == phaseDone {
-		style = style.PaddingBottom(2)
-	}
-	return style.Render(content)
+	fmt.Print(line)
 }
 
 func scale(speed float64) (float64, string) {
