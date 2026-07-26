@@ -22,11 +22,19 @@ jobs:
         with:
           go-version: stable
 
+      - name: Prepare latest tag/release
+        run: |
+          gh release delete latest --yes 2>/dev/null || true
+          git tag -f latest
+          git push origin latest -f
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Release
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --snapshot
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
