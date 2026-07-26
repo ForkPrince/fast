@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +11,8 @@ import (
 	"syscall"
 	"time"
 )
+
+var version = "dev"
 
 const (
 	connections = 5
@@ -124,6 +125,11 @@ func scale(speed float64) (float64, string) {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println(version)
+		return
+	}
+
 	urls, err := targets(connections)
 	if err != nil {
 		var netErr net.Error

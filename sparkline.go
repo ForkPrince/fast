@@ -16,6 +16,10 @@ var dots = [4][2]byte{
 // column is filled from the bottom up to its value, so the series reads like a
 // tiny bar chart that climbs as the speed ramps up.
 func sparkline(values []float64, peak float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
 	cols, rows := width*2, 4
 	cells := make([]byte, width)
 
@@ -30,7 +34,8 @@ func sparkline(values []float64, peak float64, width int) string {
 				v += (values[i+1] - values[i]) * (pos - float64(i))
 			}
 
-			height := int(v/peak*float64(rows) + 0.5)
+			ratio := min(max(v/peak, 0), 1)
+			height := int(ratio*float64(rows) + 0.5)
 			for y := rows - height; y < rows; y++ {
 				cells[px/2] |= dots[y][px%2]
 			}
@@ -38,6 +43,7 @@ func sparkline(values []float64, peak float64, width int) string {
 	}
 
 	var b strings.Builder
+	b.Grow(width * 3)
 	for _, bits := range cells {
 		if bits == 0 {
 			b.WriteByte(' ')
