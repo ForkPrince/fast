@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
-	"sync/atomic"
 	"time"
 )
 
@@ -47,44 +46,6 @@ func newFastService() fastService {
 
 func isHTTPSuccess(statusCode int) bool {
 	return statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices
-}
-
-func (s fastService) targetsWithToken(ctx context.Context, count int, token string) ([]string, error) {
-	endpoint, err := url.Parse(s.apiURL)
-	if err != nil {
-		return nil, err
-	}
-	query := endpoint.Query()
-	query.Set("https", "true")
-	query.Set("token", token)
-	query.Set("urlCount", strconv.Itoa(count))
-	endpoint.RawQuery = query.Encode()
-
-	body, err := s.get(ctx, endpoint.String())
-	if err != nil {
-		return nil, err
-	}
-
-	var response struct {
-		Targets []struct {
-			URL string `json:"url"`
-		} `json:"targets"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, err
-	}
-	if len(response.Targets) == 0 {
-		return nil, fmt.Errorf("fast.com returned no targets")
-	}
-
-	urls := make([]string, len(response.Targets))
-	for i, target := range response.Targets {
-		if target.URL == "" {
-			return nil, fmt.Errorf("fast.com returned an empty target")
-		}
-		urls[i] = target.URL
-	}
-	return urls, nil
 }
 
 func (s fastService) targets(ctx context.Context, count int) ([]string, error) {
@@ -137,6 +98,44 @@ func (s fastService) token(ctx context.Context) (string, error) {
 	return string(match[1]), nil
 }
 
+func (s fastService) targetsWithToken(ctx context.Context, count int, token string) ([]string, error) {
+	endpoint, err := url.Parse(s.apiURL)
+	if err != nil {
+		return nil, err
+	}
+	query := endpoint.Query()
+	query.Set("https", "true")
+	query.Set("token", token)
+	query.Set("urlCount", strconv.Itoa(count))
+	endpoint.RawQuery = query.Encode()
+
+	body, err := s.get(ctx, endpoint.String())
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Targets []struct {
+			URL string `json:"url"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if len(response.Targets) == 0 {
+		return nil, fmt.Errorf("fast.com returned no targets")
+	}
+
+	urls := make([]string, len(response.Targets))
+	for i, target := range response.Targets {
+		if target.URL == "" {
+			return nil, fmt.Errorf("fast.com returned an empty target")
+		}
+		urls[i] = target.URL
+	}
+	return urls, nil
+}
+
 func (s fastService) get(ctx context.Context, requestURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
@@ -174,47 +173,4 @@ func isTokenRejection(err error) bool {
 	var statusErr *statusError
 	return errors.As(err, &statusErr) &&
 		(statusErr.code == http.StatusUnauthorized || statusErr.code == http.StatusForbidden)
-}
-
-var globalService = newFastService()
-
-func targets(count int) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), metadataTimeout)
-	defer cancel()
-	return globalService.targets(ctx, count)
-}
-
-func download(ctx context.Context, url string, total *atomic.Int64) {
-	buffer := make([]byte, 64*1024)
-	for ctx.Err() == nil {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return
-		}
-		req.Header.Set("Accept-Encoding", "identity")
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return
-		}
-		if !isHTTPSuccess(resp.StatusCode) {
-			resp.Body.Close()
-			return
-		}
-
-		_, copyErr := io.CopyBuffer(counter{total}, resp.Body, buffer)
-		closeErr := resp.Body.Close()
-		if ctx.Err() != nil || copyErr != nil || closeErr != nil {
-			return
-		}
-	}
-}
-
-type counter struct {
-	total *atomic.Int64
-}
-
-func (c counter) Write(p []byte) (int, error) {
-	c.total.Add(int64(len(p)))
-	return len(p), nil
 }

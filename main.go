@@ -16,16 +16,17 @@ func main() {
 		return
 	}
 
-	urls, err := targets(connections)
+	final, err := Run(NewModel())
 	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) {
-			fmt.Fprintln(os.Stderr, "No internet connection.")
-			os.Exit(1)
-		}
 		log.Fatal(err)
 	}
 
-	m := NewModel(urls)
-	m.run()
+	if m, ok := final.(Model); ok && m.err != nil {
+		var netErr net.Error
+		if errors.As(m.err, &netErr) {
+			fmt.Fprintln(os.Stderr, "No internet connection.")
+			os.Exit(1)
+		}
+		log.Fatal(m.err)
+	}
 }
